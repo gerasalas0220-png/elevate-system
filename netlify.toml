@@ -1,2 +1,6 @@
 [build]
   publish = "."
+
+[[edge_functions]]
+  path = "/api/claude-proxy"
+  function = "claude-proxy"

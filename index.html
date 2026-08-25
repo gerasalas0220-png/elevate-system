@@ -1521,7 +1521,7 @@ function populateSel(){
 // Deployed directly via Supabase, so it doesn't depend on Netlify functions
 // being picked up correctly on a drag-and-drop deploy.
 async function callAPI(prompt){
-  const r=await fetch('/.netlify/functions/claude-proxy',{
+  const r=await fetch('/api/claude-proxy',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({prompt})
