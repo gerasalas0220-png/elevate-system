@@ -137,6 +137,12 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .bar-track{flex:1;height:6px;background:var(--light);border-radius:3px;overflow:hidden;}
 .bar-fill{height:100%;border-radius:3px;}
 .bar-val{font-size:11px;font-weight:700;color:var(--dark);width:26px;text-align:right;}
+.blk-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;}
+.bb1{background:#E6F1FB;color:#0C447C;}
+.bb2{background:#EAF3DE;color:#3B6D11;}
+.bb3{background:#EEEDFE;color:#3C3489;}
+.bb4{background:#FAEEDA;color:#633806;}
+.bb5{background:#FAECE7;color:#712B13;}
 
 /* OFFLINE BADGE */
 .offline-badge{display:none;background:#FAEEDA;color:#633806;font-size:11px;font-weight:600;padding:6px 16px;text-align:center;}
@@ -777,6 +783,11 @@ function renderRoster(){
       <div class="s-info">
         <div class="s-name">${s.name}</div>
         <div class="s-meta">${p.short} · ${s.age!==null?s.age+' años':''}</div>
+        <div style="margin-top:4px;">${EVALUATORS.map(ev=>{
+          const done=doneFlags[EVALUATORS.indexOf(ev)];
+          const initial=ev.name.replace('Profesora ','').charAt(0).toUpperCase();
+          return `<span title="${ev.name}: ${done?'completo':'pendiente'}" style="display:inline-flex;align-items:center;gap:2px;font-size:9px;font-weight:700;padding:2px 5px;border-radius:9px;background:${done?'var(--green-bg)':'var(--light)'};color:${done?'var(--green)':'var(--gray)'};margin-right:3px;">${done?'✓':'○'} ${initial}</span>`;
+        }).join('')}</div>
       </div>
       <span class="s-tag ${tc}">${tt}</span>
       <div class="s-btns">
@@ -870,7 +881,13 @@ function renderGrid(){
 
   let h='<thead><tr class="grid-th-row"><th class="grid-crit-col">Criterio</th>';
   gridStudents.forEach(s=>{
-    h+=`<th><div class="grid-student-name">${s.name}</div><button class="grid-remove-btn" onclick="removeFromGrid(${s.id})">✕ quitar</button></th>`;
+    const ns=normScores(s.scores);
+    const statusHtml=EVALUATORS.map(ev=>{
+      const done=Object.keys(ns[ev.id]||{}).length===TOTAL;
+      const initial=ev.name.replace('Profesora ','').charAt(0).toUpperCase();
+      return `<span id="grid-status-${s.id}-${ev.id}" title="${ev.name}: ${done?'completo':'pendiente'}" style="display:inline-flex;align-items:center;gap:2px;font-size:9.5px;font-weight:700;padding:2px 6px;border-radius:10px;background:${done?'var(--green-bg)':'var(--light)'};color:${done?'var(--green)':'var(--gray)'};margin:1px;">${done?'✓':'○'} ${initial}</span>`;
+    }).join('');
+    h+=`<th><div class="grid-student-name">${s.name}</div><div style="margin-top:3px;">${statusHtml}</div><button class="grid-remove-btn" onclick="removeFromGrid(${s.id})">✕ quitar</button></th>`;
   });
   h+='</tr></thead><tbody>';
 
@@ -956,6 +973,16 @@ async function setGridScore(studentId,critKey,rawVal){
   const tot=calcTotal(ns[curEvaluator]);
   if(totalEl)totalEl.textContent=tot!==null?tot.toFixed(2):'—';
   if(vEl){const v=tot!==null?verd(tot):{t:'—',c:''};vEl.textContent=tot!==null?v.t:'—';vEl.className=v.c;}
+  const statusEl=document.getElementById(`grid-status-${studentId}-${curEvaluator}`);
+  if(statusEl){
+    const done=evaluatorDone(ns,curEvaluator);
+    const evName=EVALUATORS.find(e=>e.id===curEvaluator)?.name||'';
+    const initial=evName.replace('Profesora ','').charAt(0).toUpperCase();
+    statusEl.title=evName+': '+(done?'completo':'pendiente');
+    statusEl.style.background=done?'var(--green-bg)':'var(--light)';
+    statusEl.style.color=done?'var(--green)':'var(--gray)';
+    statusEl.textContent=(done?'✓':'○')+' '+initial;
+  }
   if(bothDone)toast('Evaluación completa para '+student.name+' — nota final calculada ✓',3000);
 }
 
@@ -983,6 +1010,34 @@ function renderDashboard(){
     return `<div class="bar-row"><span class="bar-lbl">${x.block.sh}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${x.block.col};"></div></div><span class="bar-val">${x.avg!==null?x.avg.toFixed(1):'—'}</span></div>`;
   }).join('');
 
+  // Lowest-scoring individual criteria across all evaluated students — a
+  // concrete, specific list (not just broad categories) of what to focus
+  // training time on.
+  const critAvgs=[];
+  B.forEach(b=>{
+    b.c.forEach(c=>{
+      const vals=done.map(s=>{const fs=finalScores(s.scores);return fs?fs[c.k]:undefined;}).filter(v=>v!==undefined);
+      if(vals.length){
+        const avg=vals.reduce((a,v)=>a+v,0)/vals.length;
+        critAvgs.push({block:b,crit:c,avg});
+      }
+    });
+  });
+  critAvgs.sort((a,b)=>a.avg-b.avg);
+  const weakest=critAvgs.slice(0,6);
+  const weakestHtml=weakest.map(x=>{
+    const pct=Math.round((x.avg/5)*100);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
+      <span class="blk-badge bb${x.block.n}" style="flex-shrink:0;">B${x.block.n}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12.5px;font-weight:600;color:var(--dark);">${x.crit.en}</div>
+        <div style="font-size:11px;color:var(--gray);font-style:italic;">${x.crit.es}</div>
+      </div>
+      <div style="width:60px;flex-shrink:0;"><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${x.block.col};"></div></div></div>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:var(--dark);width:32px;text-align:right;">${x.avg.toFixed(1)}</span>
+    </div>`;
+  }).join('');
+
   el.innerHTML=`<div class="card" style="margin-bottom:16px;">
     <div class="card-title">Dashboard — ${done.length} alumna${done.length===1?'':'s'} evaluada${done.length===1?'':'s'}</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
@@ -1003,6 +1058,8 @@ function renderDashboard(){
     </div>
     <div class="card-title" style="margin-top:4px;">Promedio por categoría</div>
     ${barsHtml}
+    ${weakest.length?`<div class="card-title" style="margin-top:20px;">📌 Criterios específicos a reforzar (todas las alumnas)</div>
+    ${weakestHtml}`:''}
   </div>`;
 }
 
