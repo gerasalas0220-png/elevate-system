@@ -1526,13 +1526,42 @@ async function callAPI(prompt){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({prompt})
   });
-  let d;
-  try{d=await r.json();}catch(e){throw new Error('Respuesta inválida del servidor ('+r.status+').');}
   if(!r.ok){
+    let d;
+    try{d=await r.json();}catch(e){throw new Error('Respuesta inválida del servidor ('+r.status+').');}
     const msg=(d&&(d.error||d.message))||('Error del servidor ('+r.status+')');
     throw new Error(msg);
   }
-  return (d.content||[]).map(i=>i.text||'').join('\n');
+  // The proxy streams Anthropic's response (Server-Sent Events) instead of
+  // waiting for one huge non-streamed reply — this is what lets a long AI
+  // report avoid the ~10s synchronous-function timeout that was killing
+  // this same call before. Parse the SSE stream and reassemble the text.
+  const reader=r.body.getReader();
+  const decoder=new TextDecoder();
+  let buffer='',fullText='';
+  while(true){
+    const{done,value}=await reader.read();
+    if(done)break;
+    buffer+=decoder.decode(value,{stream:true});
+    const lines=buffer.split('\n');
+    buffer=lines.pop();
+    for(const line of lines){
+      const t=line.trim();
+      if(!t.startsWith('data:'))continue;
+      const jsonStr=t.slice(5).trim();
+      if(!jsonStr||jsonStr==='[DONE]')continue;
+      let evt;
+      try{evt=JSON.parse(jsonStr);}catch(e){continue;}
+      if(evt.type==='content_block_delta'&&evt.delta&&evt.delta.type==='text_delta'){
+        fullText+=evt.delta.text;
+      }
+      if(evt.type==='error'){
+        throw new Error((evt.error&&evt.error.message)||'Error de streaming de la IA');
+      }
+    }
+  }
+  if(!fullText)throw new Error('La IA no devolvió contenido.');
+  return fullText;
 }
 
 function buildPrompt(s){
