@@ -1853,6 +1853,84 @@ function printDR() {
 
 // ── GENERATE FROM REPORT TAB ───────────────────────
 let drStudentName='Reporte-Tecnico';
+function buildBlockPrompt(s,block){
+  const p=PROGS[s.progIdx||0];
+  const sc=finalScores(s.scores)||{};
+  const avg=bavg(block.id,sc);
+  let txt=`Sos el evaluador técnico de Elevate Dance Studio. Generá SOLO un JSON válido sin markdown ni texto adicional, para UN SOLO BLOQUE de la evaluación de este bailarín. Sé específico sobre el cuerpo del bailarín pero conciso.
+
+ALUMNO: ${s.name} | EDAD: ${s.age!==null?s.age+' años':'no especificada'} | PROGRAMA: ${p.name} (${p.type})
+NOTA: cada puntaje es el PROMEDIO de todas las evaluadoras que calificaron de forma independiente.
+
+BLOQUE: ${block.name} (${Math.round(block.w*100)}%) — Promedio: ${avg!==null?avg.toFixed(1):'N/A'}
+
+CRITERIOS:\n`;
+  block.c.forEach(c=>{const score=sc[c.k];txt+=`  ${c.en} / ${c.es}: ${score!==undefined?score.toFixed(1)+'/5 ('+SL[Math.round(score)]+')':'N/A'}\n`;});
+
+  txt+=`
+Para CADA CRITERIO del bloque:
+1. "observation": 2 oraciones específicas sobre el cuerpo de ESTE bailarín (qué se observó, qué funciona, dónde hay compensaciones).
+2. "what_works": 1 oración positiva.
+3. "needs_development": si score 1-3, 1 oración específica. Si score 4-5, null exacto.
+4. "next_step": 1 oración con la acción más concreta (frecuencia/duración si aplica).
+5. "exercise": si score 1-3: {"name":"Nombre del ejercicio","how_to":"2 oraciones de cómo hacerlo"}. Si score 4-5: null exacto.
+
+Para el bloque:
+6. "summary": 1 oración que resume el estado general del bloque para este bailarín.
+
+JSON FORMAT EXACTO (no cambiar la estructura):
+{
+  "id": "${block.id}",
+  "summary": "...",
+  "criteria": [
+    {"key": "...", "observation": "...", "what_works": "...", "needs_development": null, "next_step": "...", "exercise": null}
+  ]
+}`;
+  return txt;
+}
+
+function buildConclusionPrompt(s,blockResults){
+  const p=PROGS[s.progIdx||0];
+  const sc=finalScores(s.scores)||{};
+  const total=calcTotal(sc);
+  const v=total!==null?(total>=4.5?'Aceptada':total>=3.5?'Condicional':'No apta'):'N/A';
+  let txt=`Sos el evaluador técnico de Elevate Dance Studio. Generá SOLO un JSON válido sin markdown, con la CONCLUSIÓN de la evaluación de este bailarín (ya se evaluaron los 5 bloques por separado).
+
+ALUMNO: ${s.name} | EDAD: ${s.age!==null?s.age+' años':'no especificada'} | PROGRAMA: ${p.name} (${p.type}) | TOTAL: ${total?total.toFixed(2)+'/5':'N/A'} | VEREDICTO: ${v} | NOTAS: ${s.notes||'ninguna'}
+
+RESUMEN POR BLOQUE:\n`;
+  B.forEach(b=>{
+    const r=blockResults.find(x=>x.id===b.id);
+    txt+=`- ${b.name}: ${r?r.summary:''}\n`;
+  });
+  txt+=`
+1. "recommendation": 2 oraciones de recomendación completa y específica para este alumno.
+2. "priorities": array de exactamente 3 objetos:
+   {"title":"Título corto","description":"1-2 oraciones de por qué es prioridad","exercises":[{"name":"...","how_to":"2 oraciones"},{"name":"...","how_to":"2 oraciones"}]}
+3. "message_es": mensaje motivacional personal y específico (2-3 oraciones), en español.
+4. "message_en": el mismo mensaje en inglés.
+
+JSON FORMAT EXACTO:
+{
+  "recommendation": "...",
+  "priorities": [{"title":"...","description":"...","exercises":[{"name":"...","how_to":"..."},{"name":"...","how_to":"..."}]}],
+  "message_es": "...",
+  "message_en": "..."
+}`;
+  return txt;
+}
+
+function parseJsonResponse(raw){
+  const clean=raw.replace(/```json|```/g,'').trim();
+  try{return JSON.parse(clean);}
+  catch(e){
+    const m=clean.match(/\{[\s\S]*\}/);
+    if(m){try{return JSON.parse(m[0]);}catch(e2){/* fall through */}}
+    const snippet='<br><br><strong>Diagnóstico (largo: '+clean.length+' caracteres):</strong><br><span style="font-size:11px;font-family:monospace;white-space:pre-wrap;word-break:break-all;">INICIO: '+clean.substring(0,200)+'<br><br>FIN: '+clean.substring(Math.max(0,clean.length-200))+'</span>';
+    throw new Error('La respuesta de la IA llegó incompleta o con formato inválido.'+snippet);
+  }
+}
+
 async function genDetailedReport(id) {
   const student = students.find(s => s.id === id);
   if (!student) return;
@@ -1861,17 +1939,25 @@ async function genDetailedReport(id) {
   openDR();
   document.getElementById('dr-wrap').innerHTML = '';
   document.getElementById('dr-loading').style.display = 'block';
+  const loadingEl=document.getElementById('dr-loading');
+  const setLoadingMsg=(msg)=>{
+    const p=loadingEl.querySelector('p');
+    if(p)p.textContent=msg;
+  };
   try {
-    const raw = await callAPI(buildPrompt(student));
-    const clean = raw.replace(/```json|```/g, '').trim();
-    let evalData;
-    try { evalData = JSON.parse(clean); }
-    catch(e) {
-      const m = clean.match(/\{[\s\S]*\}/);
-      const snippet='<br><br><strong>Diagnóstico (largo: '+clean.length+' caracteres):</strong><br><span style="font-size:11px;font-family:monospace;white-space:pre-wrap;word-break:break-all;">INICIO: '+clean.substring(0,300)+'<br><br>FIN: '+clean.substring(Math.max(0,clean.length-300))+'</span>';
-      if(m){try{evalData=JSON.parse(m[0]);}catch(e2){throw new Error('La respuesta de la IA llegó incompleta o con formato inválido. Probá generar el reporte de nuevo.'+snippet);}}
-      else throw new Error('La respuesta de la IA llegó vacía o incompleta. Probá generar el reporte de nuevo.'+snippet);
+    const blockResults=[];
+    for(let i=0;i<B.length;i++){
+      const block=B[i];
+      setLoadingMsg('Generando bloque '+(i+1)+' de '+(B.length+1)+': '+block.name+'...');
+      const raw=await callAPI(buildBlockPrompt(student,block));
+      const parsed=parseJsonResponse(raw);
+      blockResults.push(parsed);
     }
+    setLoadingMsg('Generando conclusión y prioridades...');
+    const concRaw=await callAPI(buildConclusionPrompt(student,blockResults));
+    const conclusion=parseJsonResponse(concRaw);
+
+    const evalData={blocks:blockResults,conclusion};
     document.getElementById('dr-loading').style.display = 'none';
     document.getElementById('dr-wrap').innerHTML = render(student, evalData);
     document.getElementById('dr-overlay').scrollTop = 0;
